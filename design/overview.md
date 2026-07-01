@@ -15,7 +15,7 @@
 | メモ機能 | 間違えた理由・ポイントを自分で記録 |
 | 復習日設定 | 次の復習日をユーザーが自分で設定する |
 | 今日の復習 | 復習日が来た問題を自動でリストアップ |
-| 克服済み管理 | 連続正解した問題をmastered（克服済み）に移動 |
+| 克服済み管理 | 3回連続正解すると克服の提案が表示され、ユーザーの確認でmastered（克服済み）に移動 |
 | 科目・単元管理 | 科目・単元ごとに問題を整理できる |
 
 ---
@@ -63,15 +63,17 @@
 ユーザー（ブラウザ）
 　↓
 Next.js（フロントエンド）
-　↓
-Amazon Cognito（認証）
-　↓
-API Gateway
-　↓
-ECS + Fargate（FastAPI）
-　↓
-RDS PostgreSQL（データ）
+　│
+　├─→ Amazon Cognito（ログイン時：JWTトークン取得）
+　│
+　└─→ API Gateway（Authorization: Bearer {JWT}）
+　　　　↓
+　　　ECS + Fargate（FastAPI：Cognito公開鍵でJWT検証）
+　　　　↓
+　　　RDS PostgreSQL（データ）
 ```
+
+> Cognito はリクエスト経路の中継点ではなく、フロントエンドがログイン時にトークンを取得する先。APIリクエストには取得したJWTを付与し、FastAPI側で検証する。
 
 ---
 

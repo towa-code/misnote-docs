@@ -50,6 +50,7 @@ Authorization: Bearer {CognitoのJWTトークン}
 | メソッド | パス | 説明 |
 |---------|------|------|
 | POST | `/questions/{id}/attempts` | 回答を記録 |
+| GET | `/questions/{id}/attempts` | 回答履歴一覧取得 |
 
 ### 間違いノート（mistake_notes）
 
@@ -58,8 +59,18 @@ Authorization: Bearer {CognitoのJWTトークン}
 | GET | `/mistake-notes` | 苦手問題一覧取得 |
 | GET | `/mistake-notes/today` | 今日の復習一覧取得 |
 | GET | `/mistake-notes/mastered` | 克服済み一覧取得 |
+| GET | `/mistake-notes/{id}` | 間違いノート詳細取得 |
 | PUT | `/mistake-notes/{id}` | メモ・復習日を更新 |
-| PUT | `/mistake-notes/{id}/mastered` | 克服済みに変更 |
+| PUT | `/mistake-notes/{id}/status` | ステータス変更（克服済み化・苦手に戻す） |
+
+### ページネーション（一覧系API共通）
+
+一覧を返すAPI（`GET /questions`、`GET /mistake-notes` 系）は以下のクエリパラメータを受け付ける。
+
+| パラメータ | 型 | デフォルト | 説明 |
+|-----------|-----|----------|------|
+| limit | INTEGER | 100 | 取得件数の上限 |
+| offset | INTEGER | 0 | 取得開始位置 |
 
 ---
 
@@ -188,6 +199,7 @@ Authorization: Bearer {CognitoのJWTトークン}
 |-----------|-----|------|------|
 | subject_id | UUID | No | 科目で絞り込む |
 | unit_id | UUID | No | 単元で絞り込む |
+| limit / offset | INTEGER | No | ページネーション（共通仕様参照） |
 
 **レスポンス**
 ```json
@@ -240,7 +252,8 @@ Authorization: Bearer {CognitoのJWTトークン}
 }
 ```
 
-> `unit_id`・`memo`・`learning`・`next_review_at` は省略可。いずれかが指定された場合、`mistake_notes` レコードが自動で作成される（`next_review_at` 未指定時は `null`）。
+> `unit_id`・`memo`・`learning`・`next_review_at` は省略可。`unit_id` を指定する場合は `subject_id` の科目に属する単元であること（違反時は 400）。
+> `memo`・`learning`・`next_review_at` の**いずれかが指定された場合**、`mistake_notes` レコードが自動で作成される（初期値: `status=active`、`wrong_count=1`、`correct_streak=0`、`next_review_at` 未指定時は `null`）。
 
 **レスポンス**
 ```json
@@ -255,7 +268,7 @@ Authorization: Bearer {CognitoのJWTトークン}
 }
 ```
 
-> `memo`・`next_review_at` を渡さなかった場合、`mistake_note_id` は `null`
+> `memo`・`learning`・`next_review_at` をいずれも渡さなかった場合、`mistake_note_id` は `null`
 
 ---
 
@@ -273,6 +286,8 @@ Authorization: Bearer {CognitoのJWTトークン}
 ```
 
 **レスポンス** — `GET /questions/{id}` と同じ形
+
+> POST と同様、`unit_id` は `subject_id` の科目に属する単元であること（違反時は 400）
 
 ---
 
@@ -297,6 +312,8 @@ Authorization: Bearer {CognitoのJWTトークン}
 }
 ```
 
+> `user_answer` は省略可（自己採点方式のため、答えを書かずに正誤だけ記録できる）
+
 **レスポンス**
 ```json
 {
@@ -305,11 +322,42 @@ Authorization: Bearer {CognitoのJWTトークン}
   "user_answer": "x = 3",
   "is_correct": false,
   "answered_at": "2024-01-01T00:00:00",
-  "mistake_note_id": "uuid"
+  "mistake_note_id": "uuid",
+  "correct_streak": 0,
+  "mastery_suggested": false
 }
 ```
 
-> 不正解の場合、`mistake_notes` に自動でレコードが追加される（`next_review_at` は `null` で作成され、ユーザーが後から設定する）。正解の場合 `mistake_note_id` は `null`
+**mistake_notes への副作用**
+
+| 条件 | 挙動 |
+|------|------|
+| 不正解・ノート無し | ノートを自動作成（`wrong_count=1`、`correct_streak=0`、`next_review_at=null`。復習日はユーザーが後から設定する） |
+| 不正解・ノート有り | 既存ノートを更新：`wrong_count` +1、`correct_streak` を 0 にリセット。`mastered` だった場合は `active` に戻す（重複ノートは作らない） |
+| 正解・ノート有り | `correct_streak` +1 |
+| 正解・ノート無し | 何もしない（`mistake_note_id`・`correct_streak`・`mastery_suggested` は `null`） |
+
+> `mastery_suggested` は更新後の `correct_streak` が **3 以上**のとき `true`。フロントエンドはこれを見て「克服済みにしますか？」と提案する（mastered への変更は別途 `PUT /mistake-notes/{id}/status` で行う。自動では遷移しない）
+
+---
+
+### 回答履歴一覧取得
+`GET /questions/{id}/attempts`
+
+**レスポンス**
+```json
+[
+  {
+    "id": "uuid",
+    "question_id": "uuid",
+    "user_answer": "x = 3",
+    "is_correct": false,
+    "answered_at": "2024-01-01T00:00:00"
+  }
+]
+```
+
+> `answered_at` の降順で返す
 
 ---
 
@@ -325,6 +373,8 @@ status が `active` の一覧を返す。
     "id": "uuid",
     "question": {
       "id": "uuid",
+      "subject": { "id": "uuid", "name": "数学" },
+      "unit": { "id": "uuid", "name": "二次方程式" },
       "question_text": "次の方程式を解け: 2x + 3 = 7",
       "correct_answer": "x = 2"
     },
@@ -332,10 +382,13 @@ status が `active` の一覧を返す。
     "learning": "移項するとき符号が反転することを公式として覚える",
     "status": "active",
     "wrong_count": 3,
+    "correct_streak": 1,
     "next_review_at": "2024-01-08"
   }
 ]
 ```
+
+> 画面で科目名・単元名を表示するため、`question` には `subject`・`unit` を含める（`unit` は未設定なら `null`）。以降の mistake-notes 系レスポンスも同じ形
 
 ---
 
@@ -344,6 +397,8 @@ status が `active` の一覧を返す。
 
 `next_review_at` が今日以前で `status` が `active` の一覧を返す。
 
+> `next_review_at` が `null` のノートは含まれない。未設定分の扱い（「復習日未設定」セクション）は [画面設計](./screen-design.md) を参照
+
 **レスポンス**
 ```json
 [
@@ -351,12 +406,16 @@ status が `active` の一覧を返す。
     "id": "uuid",
     "question": {
       "id": "uuid",
+      "subject": { "id": "uuid", "name": "数学" },
+      "unit": { "id": "uuid", "name": "二次方程式" },
       "question_text": "次の方程式を解け: 2x + 3 = 7",
       "correct_answer": "x = 2"
     },
     "memo": "符号のミスに注意",
     "learning": "移項するとき符号が反転することを公式として覚える",
+    "status": "active",
     "wrong_count": 3,
+    "correct_streak": 1,
     "next_review_at": "2024-01-01"
   }
 ]
@@ -376,6 +435,8 @@ status が `mastered` の一覧を返す。
     "id": "uuid",
     "question": {
       "id": "uuid",
+      "subject": { "id": "uuid", "name": "数学" },
+      "unit": { "id": "uuid", "name": "二次方程式" },
       "question_text": "次の方程式を解け: 2x + 3 = 7",
       "correct_answer": "x = 2"
     },
@@ -383,10 +444,20 @@ status が `mastered` の一覧を返す。
     "learning": "移項するとき符号が反転することを公式として覚える",
     "status": "mastered",
     "wrong_count": 3,
+    "correct_streak": 3,
     "next_review_at": null
   }
 ]
 ```
+
+---
+
+### 間違いノート詳細取得
+`GET /mistake-notes/{id}`
+
+復習画面への直接アクセス（URL指定・リロード）で使う。
+
+**レスポンス** — 一覧の1要素と同じ形（`question` に `subject`・`unit` を含む）
 
 ---
 
@@ -415,10 +486,15 @@ status が `mastered` の一覧を返す。
 
 ---
 
-### 克服済みに変更
-`PUT /mistake-notes/{id}/mastered`
+### ステータス変更
+`PUT /mistake-notes/{id}/status`
 
-リクエストボディなし。
+克服済みへの変更（`mastered`）と、克服済みから苦手への復帰（`active`）の両方に使う。
+
+**リクエスト**
+```json
+{ "status": "mastered" }
+```
 
 **レスポンス**
 ```json
@@ -427,14 +503,20 @@ status が `mastered` の一覧を返す。
   "status": "mastered",
   "question": {
     "id": "uuid",
+    "subject": { "id": "uuid", "name": "数学" },
+    "unit": { "id": "uuid", "name": "二次方程式" },
     "question_text": "次の方程式を解け: 2x + 3 = 7",
     "correct_answer": "x = 2"
   },
   "memo": "符号のミスに注意",
+  "learning": "移項するとき符号が反転することを公式として覚える",
   "wrong_count": 3,
+  "correct_streak": 3,
   "next_review_at": null
 }
 ```
+
+> `mastered` にすると `next_review_at` は `null` にクリアされる。`active` に戻した場合、`correct_streak` は 0 にリセットし、復習日はユーザーが改めて設定する
 
 ---
 
@@ -442,12 +524,15 @@ status が `mastered` の一覧を返す。
 
 | ステータスコード | 意味 |
 |----------------|------|
-| 400 | リクエストの形式が間違っている |
+| 400 | ビジネスルール違反（例：単元が指定科目に属していない） |
 | 401 | 認証エラー（トークンが無効） |
 | 403 | 権限エラー（他のユーザーのデータにアクセス） |
 | 404 | データが見つからない |
 | 409 | 競合エラー（紐づくデータが存在するため削除不可） |
+| 422 | バリデーションエラー（必須項目の欠落・型不一致。FastAPI が自動で返す） |
 | 500 | サーバーエラー |
+
+> 形式チェック（Pydantic）は 422、形式は正しいが業務的に不正なリクエストは 400 を使う
 
 **エラーレスポンスの形式**
 ```json

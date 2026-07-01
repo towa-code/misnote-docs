@@ -11,8 +11,11 @@ This is a **design documentation repository** for "misnote" (間違いノート�
 | File | Contents |
 |------|----------|
 | `design/overview.md` | App description, feature list, tech stack, system architecture diagram, screen list |
-| `design/db-design.md` | Full schema (6 tables), ER relationships, design rationale |
+| `design/db-design.md` | Full schema (6 tables), ER relationships, indexes, design rationale |
 | `design/api-design.md` | REST endpoints, request/response examples, error codes, OpenAPI generator workflow |
+| `design/screen-design.md` | Screen transition diagram, per-screen layout/data/actions, API usage per screen |
+| `design/mockups/` | Static HTML mockups (one per screen + `00_prototype.html` combining all screens) |
+| `ROADMAP.md` | Implementation roadmap (Phase 0–4: local Docker → backend → frontend → local JWT → AWS) |
 
 ## Architecture Summary
 
@@ -31,8 +34,9 @@ This is a **design documentation repository** for "misnote" (間違いノート�
 
 ## Key DB Design Decisions
 
-- `unit_id` on `questions` is nullable (questions can exist without a unit)
-- `mistake_notes` is created automatically when an attempt is marked `is_correct: false`
-- `correct_streak` on `mistake_notes` tracks consecutive correct answers; `status` transitions to `mastered` when threshold is reached
-- `next_review_at` is user-set (not auto-calculated); `GET /mistake-notes/today` filters by this date
+- `unit_id` on `questions` is nullable (questions can exist without a unit); when set, the unit must belong to the question's subject
+- `mistake_notes.question_id` is UNIQUE — one note per question. An incorrect attempt creates the note if absent, otherwise updates it (`wrong_count` +1, `correct_streak` reset, `mastered` reverts to `active`)
+- `correct_streak` on `mistake_notes` tracks consecutive correct answers; at 3 the API sets `mastery_suggested: true` and the UI *suggests* mastering — the transition to `mastered` is always a user action, never automatic
+- `next_review_at` is user-set (not auto-calculated) and nullable; `GET /mistake-notes/today` filters by this date and excludes `null` (the home screen shows unscheduled notes separately)
+- `attempts.user_answer` is optional — the review flow is self-graded
 - All PKs are UUIDs; all tables are scoped to `user_id` for data isolation
